@@ -164,9 +164,9 @@ class NowPlaying(private val ctx: Context) {
         }
     }
 
-    /** Current song position in ms, extrapolated between polls. Slightly ahead so words land on the beat. */
+    /** Current song position in ms, extrapolated between polls. Sync offset is added by the view. */
     fun positionMs(): Long {
         if (!playing) return basePos
-        return basePos + ((SystemClock.elapsedRealtime() - baseTime) * speed).toLong() + 120L
+        return basePos + ((SystemClock.elapsedRealtime() - baseTime) * speed).toLong() 
     }
 }

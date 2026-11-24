@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
 import kotlin.math.min
 import kotlin.random.Random
@@ -12,6 +13,12 @@ import kotlin.random.Random
 class LyricsView(ctx: Context) : View(ctx) {
     var hasAccess = false
     var onNeedAccess: (() -> Unit)? = null
+    var accessHint: String? = null
+
+    /** How many ms ahead of the reported song position lyrics are shown (compensates player lag). */
+    private val prefs = ctx.getSharedPreferences("lc", Context.MODE_PRIVATE)
+    private var syncMs: Long = prefs.getLong("sync", 1000L)
+    private var lastX = 0f
 
     /** -1 = shuffle all styles, 0..4 = lock to one style. Long-press cycles. */
     private var mode = -1
@@ -39,9 +46,24 @@ class LyricsView(ctx: Context) : View(ctx) {
 
     init {
         setBackgroundColor(Color.BLACK)
-        setOnClickListener { if (!hasAccess) onNeedAccess?.invoke() }
+        setOnTouchListener { _, e -> if (e.action == MotionEvent.ACTION_DOWN) lastX = e.x; false }
+        setOnClickListener {
+            if (!hasAccess) onNeedAccess?.invoke()
+            else if (lastX > width * 0.66f) adjustSync(100L)
+            else if (lastX < width * 0.33f) adjustSync(-100L)
+        }
         setOnLongClickListener { cycleMode(); true }
     }
+
+    /** +100 = lyrics appear 100 ms earlier. Right third of screen = earlier, left third = later. */
+    fun adjustSync(d: Long) {
+        syncMs += d
+        prefs.edit().putLong("sync", syncMs).apply()
+        toast = "Lyrics sync: " + (if (syncMs >= 0) "+" else "") + syncMs + " ms"
+        toastAt = SystemClock.uptimeMillis()
+    }
+
+    fun cycleStyle() = cycleMode()
 
     private fun nextStyle(): Int {
         if (mode >= 0) return mode
@@ -126,7 +148,7 @@ class LyricsView(ctx: Context) : View(ctx) {
 
         if (!hasAccess) {
             message(c, u, "Tap to allow notification access",
-                "Needed to see what song is playing.\nIf the switch is greyed out: App info > ⋮ > Allow restricted settings.")
+                accessHint ?: "Needed to see what song is playing.\nIf the switch is greyed out: App info > ⋮ > Allow restricted settings.")
         } else if (np.track == null) {
             message(c, u, "Play a song in Spotify or YT Music")
         } else when (state) {
@@ -151,7 +173,7 @@ class LyricsView(ctx: Context) : View(ctx) {
     }
 
     private fun drawLyrics(c: Canvas, now: Long) {
-        val t = np.positionMs()
+        val t = np.positionMs() + syncMs
         val idx = indexAt(t)
         if (idx != curIdx) {
             if (current != null) { previous = current; fadeStart = now }

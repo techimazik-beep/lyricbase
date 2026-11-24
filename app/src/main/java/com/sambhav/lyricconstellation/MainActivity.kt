@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -22,7 +23,16 @@ class MainActivity : Activity() {
             window.attributes = lp
         }
         view = LyricsView(this)
-        view.onNeedAccess = { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        view.isFocusable = true
+        view.onNeedAccess = {
+            try {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            } catch (e: Exception) {
+                // Android TV often has no such screen: enable it from a PC with adb instead.
+                view.accessHint = "No settings screen on this device. From a PC run:\n" +
+                    "adb shell cmd notification allow_listener " + packageName + "/" + packageName + ".MediaListenerService"
+            }
+        }
         setContentView(view)
     }
 
@@ -35,6 +45,17 @@ class MainActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemUi()
+    }
+
+    /** TV remote: left/right = sync, up = change style, centre = grant access. */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { view.adjustSync(100L); return true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { view.adjustSync(-100L); return true }
+            KeyEvent.KEYCODE_DPAD_UP -> { view.cycleStyle(); return true }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { view.performClick(); return true }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun hasListenerAccess(): Boolean {
