@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Lyric Constellation</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}canvas{display:block;width:100vw;height:100vh}</style></head>
+<body><canvas id="c"></canvas>
+<script>
+"use strict";
+// ───────── helpers ─────────
+const cv = document.getElementById('c'), X = cv.getContext('2d');
+const FONT = '"Segoe UI Variable","Segoe UI",system-ui,sans-serif';
+const ACCENTS = ['#FF9DB8', '#8FE3FF', '#FFD27A', '#C3A6FF', '#9BFFD0'];
+const STYLE_NAMES = ['Constellation', 'Orbit', 'Wave', 'Kinetic', 'Spotlight'];
+let W = 0, H = 0, U = 1;
+function resize() {
+  const d = window.devicePixelRatio || 1;
+  cv.width = Math.floor(innerWidth * d); cv.height = Math.floor(innerHeight * d);
+  X.setTransform(d, 0, 0, d, 0, 0);
+  W = innerWidth; H = innerHeight; U = Math.min(W, H) / 1000;
+  rebuildCurrent();
+}
+function rng(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+const ease = p => 1 - Math.pow(1 - p, 3);
+const ap = (t, s, d = 320) => Math.max(0, Math.min(1, (t - s) / d));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function setA(color, a) { X.globalAlpha = clamp(a, 0, 1); X.fillStyle = X.strokeStyle = color; }
+function activeIdx(line, t) { let a = -1; for (let i = 0; i < line.words.length; i++) { if (line.words[i].s <= t) a = i; else break; } return a; }
+function glow(x, y, r, ac, a) {
+  const g = X.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, ac + '73'); g.addColorStop(1, ac + '00');
+  X.globalAlpha = clamp(a, 0, 1); X.fillStyle = g; X.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
+function font(weight, px) { X.font = `${weight} ${px}px ${FONT}`; }
+
+// ───────── LRC parsing (same rules as the Android app) ─────────
+function parseLrc(lrc) {
+  const raw = [];
+  for (const ln of lrc.split('\n')) {
+    const tags = [...ln.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!tags.length) continue;
+    const last = tags[tags.length - 1];
+    const text = ln.slice(last.index + last[0].length).trim();
+    for (const m of tags) raw.push([Math.round((parseInt(m[1]) * 60 + parseFloat(m[2])) * 1000), text]);
+  }
+  raw.sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    const [s, text] = raw[i];
+    const parts = text.split(/\s+/).filter(Boolean);
+    if (!parts.length) continue;
+    const next = i + 1 < raw.length ? raw[i + 1][0] : s + 6000;
+    const end = Math.max(s + 800, Math.min(next, s + 1200 + text.length * 120));
+    const usable = (end - s) * 0.9, tot = parts.reduce((a, p) => a + p.length + 1, 0);
+    let acc = 0; const words = [];
+    for (const p of parts) { const ws = s + usable * acc / tot; acc += p.length + 1; words.push({ t: p, s: ws, e: s + usable * acc / tot }); }
+    out.push({ s, e: end, words });
+  }
+  return out;
+}
+
+function wrapWords(words, maxW, maxH, start, min, center, gap, weight) {
+  let size = start;
+  for (;;) {
+    font(weight, size);
+    const sp = X.measureText(' ').width, ws = words.map(w => X.measureText(w.t).width);
+    let row = 0, x = 0; const rowOf = [], xr = [], rw = [];
+    words.forEach((w, i) => { if (x > 0 && x + ws[i] > maxW) { rw.push(x - sp); row++; x = 0; } rowOf[i] = row; xr[i] = x; x += ws[i] + sp; });
+    rw.push(x - sp);
+    const th = (row + 1) * size * gap;
+    if ((th <= maxH && Math.max(...ws) <= maxW) || size <= min)
+      return { xs: words.map((_, i) => xr[i] + (center ? (maxW - rw[rowOf[i]]) / 2 : 0)), ys: words.map((_, i) => rowOf[i] * size * gap + size * 0.85), size, th, ws };
+    size *= 0.93;
+  }
+}
+
+// ───────── scenes ─────────
+class Constellation {
+  constructor(line, ac, seed) {
+    this.line = line; this.ac = ac;
+    const r = rng(seed), n = line.words.length, vertical = H > W * 1.1;
+    const along = vertical ? H : W, cross = vertical ? W : H, m = along * 0.1;
+    this.P = []; this.big = [];
+    line.words.forEach((q, i) => {
+      this.big[i] = q.t.length >= 5 && r() > 0.35;
+      font('bold', (this.big[i] ? 64 : 30) * U);
+      const tw = X.measureText(q.t).width;
+      const a = m + (along - 2 * m) * (n === 1 ? 0.5 : i / (n - 1)) + (r() - 0.5) * (along - 2 * m) / n * 0.7;
+      const cr = cross * (0.5 + (r() - 0.5) * 0.62);
+      if (vertical) this.P.push([Math.min(Math.max(cr, W * 0.08), W - W * 0.08 - tw), a]);
+      else this.P.push([Math.min(Math.max(a, m), W - m - tw), cr]);
+    });
+    this.E = [];
+    for (let i = 0; i < n - 1; i++) this.E.push([i, i + 1]);
+    for (let i = 0; i < n - 2; i++) if (r() > 0.55) this.E.push([i, i + 2]);
+    this.dust = Array.from({ length: 40 }, () => [r(), r()]);
+  }
+  draw(t, a) {
+    const { line, P, E, big, ac } = this, words = line.words;
+    setA('#fff', 0.22 * a); for (const [dx, dy] of this.dust) X.fillRect(dx * W, dy * H, 1.5 * U, 1.5 * U);
+    const ai = activeIdx(line, t); if (ai < 0) return;
+    X.lineWidth = 1.6 * U; X.lineCap = 'round';
+    for (const [p, q] of E) {
+      const k = ease(ap(t, words[q].s, 300)); if (k <= 0) continue;
+      setA('#D2D7FF', 0.75 * a); X.beginPath(); X.moveTo(P[p][0], P[p][1]);
+      X.lineTo(P[p][0] + (P[q][0] - P[p][0]) * k, P[p][1] + (P[q][1] - P[p][1]) * k); X.stroke();
+    }
+    for (let i = 0; i <= ai; i++) {
+      const p = ease(ap(t, words[i].s)), act = i === ai, [x, y] = P[i];
+      if (act) glow(x, y, 70 * U, ac, a * p);
+      const s = (act ? 20 : 12) * U * (0.4 + 0.6 * p);
+      setA(act ? ac : '#E8EBFF', p * a);
+      X.save(); X.translate(x, y); X.beginPath();
+      for (let k = 0; k < 8; k++) { const rd = k % 2 ? 0.28 : 1, an = k * Math.PI / 4 - Math.PI / 2; X.lineTo(Math.cos(an) * rd * s, Math.sin(an) * rd * s); }
+      X.closePath(); X.fill(); X.restore();
+      setA(act ? '#fff' : '#C9CDE8', Math.min(1, p * 1.4) * a);
+      font(big[i] || act ? 'bold' : '500', (big[i] ? 64 : act ? 46 : 30) * U);
+      X.fillText(words[i].t, x - (big[i] ? 10 * U : 0), y + (big[i] ? 70 : 44) * U);
+    }
+  }
+}
+
+class Orbit {
+  constructor(line, ac, seed) { this.line = line; this.ac = ac; this.base = rng(seed)() * 6.28; }
+  draw(t, a) {
+    const { line, ac } = this, words = line.words, n = words.length, ai = activeIdx(line, t); if (ai < 0) return;
+    const cx = W / 2, cy = H / 2, rx = W * 0.38, ry = H * 0.30, rot = t * 0.00006;
+    setA(ac, 0.9 * a); X.beginPath(); X.arc(cx, cy, 5 * U, 0, 7); X.fill();
+    X.textAlign = 'center';
+    for (let i = 0; i <= ai; i++) {
+      const p = ease(ap(t, words[i].s, 380)), act = i === ai, f = Math.sqrt((i + 0.7) / (n + 0.7));
+      const th = this.base + i * 2.39996 + rot, x = cx + rx * f * Math.cos(th), y = cy + ry * f * Math.sin(th);
+      X.lineWidth = 1.2 * U;
+      setA('#fff', 0.13 * p * a); X.beginPath(); X.ellipse(cx, cy, rx * f, ry * f, 0, 0, 7); X.stroke();
+      setA(ac, (act ? 0.55 : 0.12) * p * a); X.beginPath(); X.moveTo(cx, cy); X.lineTo(x, y); X.stroke();
+      if (act) glow(x, y, 60 * U, ac, a * p);
+      setA(act ? ac : '#E8EBFF', p * a); X.beginPath(); X.arc(x, y, (act ? 9 : 5) * U * p, 0, 7); X.fill();
+      font(act ? 'bold' : '500', (act ? 52 : 30) * U); setA(act ? '#fff' : '#B5B9D0', Math.min(1, p * 1.4) * a);
+      const tw = X.measureText(words[i].t).width / 2;
+      X.fillText(words[i].t, clamp(x, tw + 20 * U, W - tw - 20 * U), y - (act ? 22 : 16) * U);
+    }
+    X.textAlign = 'left';
+  }
+}
+
+class Wave {
+  constructor(line, ac, seed) {
+    this.line = line; this.ac = ac;
+    const r = rng(seed), n = line.words.length, vertical = H > W * 1.1;
+    const along = vertical ? H : W, cross = vertical ? W : H, m = along * 0.1, ph = r() * 6.28;
+    this.P = line.words.map((_, i) => {
+      const a = m + (along - 2 * m) * (n === 1 ? 0.5 : i / (n - 1));
+      const cr = cross * 0.5 + cross * 0.2 * Math.sin(i * 1.15 + ph) * (0.7 + 0.5 * r());
+      return vertical ? [cr, a] : [a, cr];
+    });
+  }
+  draw(t, a) {
+    const { line, ac, P } = this, words = line.words, ai = activeIdx(line, t); if (ai < 0) return;
+    if (ai >= 1) {
+      const pth = new Path2D(); pth.moveTo(P[0][0], P[0][1]); let ex = P[0][0], ey = P[0][1];
+      for (let i = 1; i < ai; i++) { ex = (P[i][0] + P[i + 1][0]) / 2; ey = (P[i][1] + P[i + 1][1]) / 2; pth.quadraticCurveTo(P[i][0], P[i][1], ex, ey); }
+      const k = ease(ap(t, words[ai].s, 350));
+      pth.lineTo(ex + (P[ai][0] - ex) * k, ey + (P[ai][1] - ey) * k);
+      X.lineCap = 'round'; X.lineJoin = 'round';
+      X.lineWidth = 10 * U; setA(ac, 0.16 * a); X.stroke(pth);
+      X.lineWidth = 3 * U; setA(ac, 0.95 * a); X.stroke(pth);
+    }
+    X.textAlign = 'center';
+    for (let i = 0; i <= ai; i++) {
+      const p = ease(ap(t, words[i].s, 350)), act = i === ai, [x, y] = P[i];
+      if (act) {
+        const span = Math.max(1, line.e - words[i].s), q = clamp((t - words[i].s) / span, 0, 1);
+        X.lineWidth = 2 * U; setA(ac, (1 - q) * 0.8 * a); X.beginPath(); X.arc(x, y, (10 + 26 * q) * U, 0, 7); X.stroke();
+      }
+      setA(act ? ac : '#fff', p * a); X.beginPath(); X.arc(x, y, (act ? 10 : 6) * U * p, 0, 7); X.fill();
+      font(act ? 'bold' : '500', (act ? 54 : 34) * U); setA(act ? '#fff' : '#D5D8EA', Math.min(1, p * 1.4) * a);
+      const tw = X.measureText(words[i].t).width / 2;
+      X.fillText(words[i].t, clamp(x, tw + 20 * U, W - tw - 20 * U), i % 2 === 0 ? y - 30 * U : y + 62 * U);
+    }
+    X.textAlign = 'left';
+  }
+}
+
+class Kinetic {
+  constructor(line, ac) {
+    this.line = line; this.ac = ac;
+    this.o = wrapWords(line.words, W * 0.84, H * 0.70, 260 * U, 30 * U, false, 1.06, '900');
+    this.y0 = (H - this.o.th) / 2;
+  }
+  draw(t, a) {
+    const { line, ac, o } = this, ai = activeIdx(line, t); font('900', o.size);
+    for (let i = 0; i <= ai; i++) {
+      const p = ease(ap(t, line.words[i].s, 420)); setA(i === ai ? ac : '#fff', p * a);
+      X.fillText(line.words[i].t, W * 0.08 + o.xs[i], this.y0 + o.ys[i] + (1 - p) * 0.3 * o.size);
+    }
+  }
+}
+
+class Spotlight {
+  constructor(line, ac) {
+    this.line = line; this.ac = ac;
+    this.o = wrapWords(line.words, W * 0.80, H * 0.60, 120 * U, 36 * U, true, 1.25, 'bold');
+    this.y0 = (H - this.o.th) / 2;
+  }
+  draw(t, a) {
+    const { line, ac, o } = this, ai = activeIdx(line, t); font('bold', o.size);
+    line.words.forEach((q, i) => {
+      const x = W * 0.10 + o.xs[i], y = this.y0 + o.ys[i];
+      if (i > ai) { setA('#4A4A4A', a); X.fillText(q.t, x, y); return; }
+      const p = ap(t, q.s, 420), act = i === ai, s = 1 + 0.12 * Math.sin(Math.PI * p), cx = x + o.ws[i] / 2, cy = y - o.size * 0.3;
+      X.save(); X.translate(cx, cy); X.scale(s, s); X.translate(-cx, -cy);
+      if (act) { X.shadowColor = ac; X.shadowBlur = 28 * U; }
+      setA(act ? '#fff' : '#E6E6E6', a); X.fillText(q.t, x, y); X.restore();
+    });
+  }
+}
+const CLASSES = [Constellation, Orbit, Wave, Kinetic, Spotlight];
+const makeScene = (style, line, seed) => new CLASSES[style](line, ACCENTS[Math.floor(rng(seed)() * ACCENTS.length)], seed);
+
+// ───────── player state ─────────
+let lines = [], state = 0, trackKey = '', track = null;      // state: 0 nothing, 1 loading, 2 ready, 3 no lyrics
+let posBase = 0, posAt = 0, playing = false;
+let current = null, previous = null, curIdx = -2, curStyle = 0, curSeed = 0, fadeStart = 0;
+let mode = -1, bag = [], lastStyle = -1, toast = '', toastAt = 0;
+let syncMs = parseInt(localStorage.getItem('lc_sync') ?? '0');   // PC speakers: no lead by default
+
+function nextStyle() {
+  if (mode >= 0) return mode;
+  if (!bag.length) {
+    bag = [0, 0, 1, 2, 3, 4].sort(() => Math.random() - 0.5);
+    if (bag[0] === lastStyle) bag.push(bag.shift());
+  }
+  return (lastStyle = bag.shift());
+}
+function rebuildCurrent() { previous = null; current = lines[curIdx] && W ? makeScene(curStyle, lines[curIdx], curSeed) : null; }
+function showToast(s) { toast = s; toastAt = performance.now(); }
+function adjustSync(d) { syncMs += d; localStorage.setItem('lc_sync', syncMs); showToast('Lyrics sync: ' + (syncMs >= 0 ? '+' : '') + syncMs + ' ms'); }
+function cycleMode() { mode = mode >= 4 ? -1 : mode + 1; showToast(mode < 0 ? 'Shuffle' : STYLE_NAMES[mode]); if (mode >= 0) curStyle = mode; rebuildCurrent(); }
+
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') adjustSync(100);
+  else if (e.key === 'ArrowLeft') adjustSync(-100);
+  else if (e.key === 'ArrowUp' || e.key === ' ') cycleMode();
+  else if (e.key === 'f' || e.key === 'F' || e.key === 'F11') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+});
+addEventListener('dblclick', () => { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); });
+let idle; addEventListener('mousemove', () => { document.body.style.cursor = 'default'; clearTimeout(idle); idle = setTimeout(() => document.body.style.cursor = 'none', 2000); });
+
+async function pollNow() {
+  try {
+    const r = await (await fetch('/now', { cache: 'no-store' })).json();
+    if (!r.ok) { track = null; playing = false; } else {
+      track = r; playing = r.playing; posBase = r.pos; posAt = performance.now();
+    }
+    const key = track ? `${track.artist}|${track.title}|${Math.round(track.duration / 1000)}` : '';
+    if (key !== trackKey) {
+      trackKey = key; lines = []; current = previous = null; curIdx = -2;
+      if (!track) state = 0; else {
+        state = 1; const k = key;
+        fetch(`/lyrics?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}&duration=${track.duration}`)
+          .then(r => r.json()).then(j => { if (trackKey !== k) return; const ls = j.lrc ? parseLrc(j.lrc) : []; if (ls.length) { lines = ls; state = 2; } else state = 3; })
+          .catch(() => { if (trackKey === k) state = 3; });
+      }
+    }
+  } catch (e) { track = null; }
+}
+setInterval(pollNow, 400); pollNow();
+
+const position = () => playing ? posBase + (performance.now() - posAt) : posBase;
+function indexAt(t) {
+  let ans = -1; for (let i = 0; i < lines.length; i++) { if (lines[i].s <= t) ans = i; else break; }
+  if (ans >= 0 && t > lines[ans].e + 2500) return -1; return ans;
+}
+function message(big, small) {
+  X.textAlign = 'center'; font('500', 38 * U); setA('#8A8A8A', 1); X.fillText(big, W / 2, H / 2);
+  if (small) { font('500', 26 * U); setA('#555', 1); X.fillText(small, W / 2, H / 2 + 60 * U); }
+  X.textAlign = 'left';
+}
+
+function frame() {
+  X.globalAlpha = 1; X.fillStyle = '#000'; X.fillRect(0, 0, W, H);
+  const now = performance.now();
+  if (!track) message('Play a song in Spotify or YouTube Music', 'Anything that shows in Windows media controls works');
+  else if (state === 1) message('Finding lyrics…');
+  else if (state === 3) message('No synced lyrics for this song');
+  else if (state === 2) {
+    const t = position() + syncMs, idx = indexAt(t);
+    if (idx !== curIdx) {
+      if (current) { previous = current; fadeStart = now; }
+      curIdx = idx;
+      if (idx >= 0) { curStyle = nextStyle(); curSeed = Math.floor(Math.random() * 4294967296); current = makeScene(curStyle, lines[idx], curSeed); }
+      else current = null;
+    }
+    if (previous) { const p = (now - fadeStart) / 500; if (p >= 1) previous = null; else previous.draw(previous.line.e, 1 - p); }
+    if (current) current.draw(t, 1);
+  }
+  X.globalAlpha = 1; X.textAlign = 'center';
+  if (track) {
+    font('500', 20 * U); setA('#777', 0.5);
+    let s = `${track.title} — ${track.artist}`; while (X.measureText(s).width > W * 0.8 && s.length > 4) s = s.slice(0, -2);
+    X.fillText(s, W / 2, H - 40 * U);
+  }
+  if (toast && now - toastAt < 2000) { font('500', 26 * U); setA('#CCC', 0.8); X.fillText(toast, W / 2, 90 * U); }
+  X.textAlign = 'left'; X.globalAlpha = 1;
+  requestAnimationFrame(frame);
+}
+addEventListener('resize', resize); resize(); requestAnimationFrame(frame);
+</script></body></html>

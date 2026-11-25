@@ -17,7 +17,8 @@ class LyricsView(ctx: Context) : View(ctx) {
 
     /** How many ms ahead of the reported song position lyrics are shown (compensates player lag). */
     private val prefs = ctx.getSharedPreferences("lc", Context.MODE_PRIVATE)
-    private var syncMs: Long = prefs.getLong("sync", 1000L)
+    private val isTv = ctx.packageManager.hasSystemFeature("android.software.leanback")
+    private var syncMs: Long = prefs.getLong(if (isTv) "sync_tv" else "sync", if (isTv) 0L else 1000L)
     private var lastX = 0f
 
     /** -1 = shuffle all styles, 0..4 = lock to one style. Long-press cycles. */
@@ -58,7 +59,7 @@ class LyricsView(ctx: Context) : View(ctx) {
     /** +100 = lyrics appear 100 ms earlier. Right third of screen = earlier, left third = later. */
     fun adjustSync(d: Long) {
         syncMs += d
-        prefs.edit().putLong("sync", syncMs).apply()
+        prefs.edit().putLong(if (isTv) "sync_tv" else "sync", syncMs).apply()
         toast = "Lyrics sync: " + (if (syncMs >= 0) "+" else "") + syncMs + " ms"
         toastAt = SystemClock.uptimeMillis()
     }
