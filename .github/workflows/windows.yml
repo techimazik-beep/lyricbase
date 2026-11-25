@@ -1,0 +1,28 @@
+name: Build Windows
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install winsdk pyinstaller
+      - run: pyinstaller --onefile --noconsole --name LyricConstellation --collect-submodules winsdk --add-data "windows/index.html;." windows/app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LyricConstellation-windows
+          path: dist/LyricConstellation.exe
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete windows-latest --cleanup-tag -y || true
+          gh release create windows-latest dist/LyricConstellation.exe --title "Windows build" --notes "Double-click LyricConstellation.exe, then play music."
